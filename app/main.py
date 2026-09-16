@@ -12,6 +12,8 @@ def create_app() -> FastAPI:
     settings = get_settings()
     app = FastAPI(title=settings.app_name, version=settings.app_version, debug=settings.debug)
     app.include_router(api_router, prefix="/api")
+    app.include_router(api_router, prefix="/api/v1", include_in_schema=False)
+
     @app.on_event("startup")
     async def warm_service_caches() -> None:
         ProductService()

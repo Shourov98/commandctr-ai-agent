@@ -52,8 +52,15 @@ async def _read_image_payload(image: UploadFile) -> ImagePayload:
 
 
 @router.get("/health")
-async def healthcheck() -> dict[str, str]:
-    return {"status": "ok"}
+async def healthcheck() -> dict[str, object]:
+    return {
+        "success": True,
+        "message": "CommandCtr AI Agent is healthy",
+        "data": {
+            "service": "CommandCtr AI Agent",
+            "status": "ok",
+        },
+    }
 
 
 @router.post(

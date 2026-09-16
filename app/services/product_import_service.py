@@ -7,8 +7,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
-import pandas as pd
 from fastapi import HTTPException, status
+from openpyxl import load_workbook
 
 from app.schemas.imports import ImportPreviewResponse, ImportedProductRow
 from app.utils.product_text import build_category, infer_product_type, normalize_title
@@ -84,17 +84,32 @@ class ProductImportService:
 
     def _parse_excel(self, filename: str, payload: bytes) -> list[ImportedProductRow]:
         try:
-            frame = pd.read_excel(io.BytesIO(payload)).fillna("")
+            workbook = load_workbook(io.BytesIO(payload), read_only=True, data_only=True)
         except Exception as exc:
             raise HTTPException(
                 status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
                 detail=f"Could not read Excel file: {exc}",
             ) from exc
-        rows = [
-            self._normalize_record(index, {str(key): value for key, value in row.items()}, source_type="excel")
-            for index, row in enumerate(frame.to_dict(orient="records"), start=1)
-        ]
-        return [row for row in rows if any(self._row_has_data(row))]
+
+        try:
+            worksheet = workbook.active
+            raw_rows = worksheet.iter_rows(values_only=True)
+            headers = next(raw_rows, None)
+            if not headers:
+                return []
+
+            header_names = [str(header).strip() if header is not None else "" for header in headers]
+            rows = []
+            for index, values in enumerate(raw_rows, start=1):
+                record = {
+                    header_names[column_index]: value if value is not None else ""
+                    for column_index, value in enumerate(values)
+                    if column_index < len(header_names) and header_names[column_index]
+                }
+                rows.append(self._normalize_record(index, record, source_type="excel"))
+            return [row for row in rows if any(self._row_has_data(row))]
+        finally:
+            workbook.close()
 
     def _parse_pdf(self, filename: str, payload: bytes) -> list[ImportedProductRow]:
         if PdfReader is None:
