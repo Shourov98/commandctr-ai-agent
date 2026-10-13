@@ -57,7 +57,7 @@ class GeminiService:
             },
         }
         if schema is not None:
-            payload["generationConfig"]["responseSchema"] = schema
+            payload["generationConfig"]["responseSchema"] = self._to_gemini_schema(schema)
         if use_google_search:
             payload["tools"] = [{"google_search": {}}]
 
@@ -117,6 +117,32 @@ class GeminiService:
                 return parsed
 
         raise GeminiServiceError("Gemini returned invalid JSON.")
+
+    @classmethod
+    def _to_gemini_schema(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [cls._to_gemini_schema(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        unsupported_fields = {
+            "additionalProperties",
+            "$schema",
+            "$id",
+        }
+        type_aliases = {
+            "object": "OBJECT",
+            "array": "ARRAY",
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+        }
+        return {
+            key: type_aliases.get(child, child) if key == "type" and isinstance(child, str) else cls._to_gemini_schema(child)
+            for key, child in value.items()
+            if key not in unsupported_fields
+        }
 
     @staticmethod
     def build_inline_media_part(*, data: bytes, mime_type: str) -> dict[str, Any]:

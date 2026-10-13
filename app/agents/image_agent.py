@@ -172,7 +172,7 @@ class ImageAgent:
     ) -> ImageVariantResponse:
         cutout_path = (
             existing_images.transparent_cutout.absolute_path
-            if existing_images.transparent_cutout is not None
+            if existing_images.transparent_cutout is not None and existing_images.transparent_cutout.absolute_path
             else None
         )
         if marketplace == "amazon":
@@ -255,7 +255,7 @@ class ImageAgent:
         )
         cutout_path = (
             existing_images.transparent_cutout.absolute_path
-            if existing_images.transparent_cutout is not None
+            if existing_images.transparent_cutout is not None and existing_images.transparent_cutout.absolute_path
             else existing_images.source.absolute_path
         )
 
