@@ -25,6 +25,14 @@ Run on a separate agent port, for example `9100`:
 uv run python -m uvicorn app.main:app --host 0.0.0.0 --port 9100 --reload --reload-dir app
 ```
 
+Run with nodemon-style manual restart:
+
+```powershell
+uv run python scripts/dev_server.py
+```
+
+While it is running, type `rs` and press Enter to clear the old logs and restart the AI agent server. Type `q` and press Enter to stop it.
+
 Open:
 
 ```text
