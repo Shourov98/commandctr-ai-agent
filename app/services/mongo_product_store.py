@@ -78,13 +78,64 @@ class MongoProductStore:
         return records
 
     def list_paginated(self, *, page: int, page_size: int, user_id: str | None = None) -> PaginatedProductListResponse:
-        records = self.list(user_id=user_id)
-        total_items = len(records)
+        query: dict[str, Any] = {}
+        if user_id is not None:
+            query["user_id"] = user_id
+
+        linked_product_ids, pending_import_fingerprints = self._import_visibility_filters(user_id=user_id)
+        projection = {
+            "_id": 0,
+            "id": 1,
+            "status": 1,
+            "created_at": 1,
+            "updated_at": 1,
+            "product.core.normalized_title": 1,
+            "product.core.category": 1,
+            "product.core.product_type": 1,
+            "product.core.attributes.sku": 1,
+            "product.images.shopify.absolute_path": 1,
+        }
+
+        linked_filter = {"id": {"$nin": list(linked_product_ids)}} if linked_product_ids else {}
+        count_query = query | linked_filter
+        total_items = self.collection.count_documents(count_query)
         total_pages = ceil(total_items / page_size) if total_items else 0
         start = (page - 1) * page_size
-        end = start + page_size
+        fetch_limit = page_size + len(pending_import_fingerprints)
+
+        records: list[ProductListItemResponse] = []
+        cursor = self.collection.find(count_query, projection).sort("updated_at", DESCENDING).skip(start).limit(fetch_limit)
+        for payload in cursor:
+            product = payload.get("product", {})
+            core = product.get("core", {})
+            attributes = core.get("attributes", {}) or {}
+            title = str(core.get("normalized_title") or "").strip()
+            sku = str(attributes.get("sku", "")).strip().lower()
+            product_id = str(payload.get("id") or "").strip()
+            if not product_id:
+                continue
+            if product_id not in linked_product_ids and title and (title.lower(), sku) in pending_import_fingerprints:
+                continue
+
+            images = product.get("images", {})
+            shopify_image = images.get("shopify", {}) if isinstance(images, dict) else {}
+            records.append(
+                ProductListItemResponse(
+                    id=product_id,
+                    status=payload.get("status") or "draft",
+                    created_at=payload.get("created_at"),
+                    updated_at=payload.get("updated_at"),
+                    normalized_title=title,
+                    category=core.get("category") or "",
+                    product_type=core.get("product_type") or "",
+                    preview_image_path=shopify_image.get("absolute_path") or "",
+                )
+            )
+            if len(records) >= page_size:
+                break
+
         return PaginatedProductListResponse(
-            items=records[start:end],
+            items=records,
             pagination=PaginationMetaResponse(
                 page=page,
                 page_size=page_size,
