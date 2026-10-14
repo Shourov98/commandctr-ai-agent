@@ -55,9 +55,9 @@ async def _read_image_payload(image: UploadFile) -> ImagePayload:
 async def healthcheck() -> dict[str, object]:
     return {
         "success": True,
-        "message": "CommandCtr AI Agent is healthy",
+        "message": "Twinstr AI Agent is healthy",
         "data": {
-            "service": "CommandCtr AI Agent",
+            "service": "Twinstr AI Agent",
             "status": "ok",
         },
     }

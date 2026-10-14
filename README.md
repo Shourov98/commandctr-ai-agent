@@ -1,6 +1,6 @@
-# CommandCtr AI Agent
+# Twinstr AI Agent
 
-FastAPI service for the CommandCtr AI/product automation agent.
+FastAPI service for the Twinstr AI/product automation agent.
 
 ## Setup
 

@@ -29,7 +29,7 @@ def create_app() -> FastAPI:
             response = await call_next(request)
         except Exception:
             print_request_log(
-                service="CommandCtr AI Agent",
+                service="Twinstr AI Agent",
                 method=request.method,
                 path=request.url.path,
                 status_code="ERROR",
@@ -42,7 +42,7 @@ def create_app() -> FastAPI:
             raise
         response.headers["x-request-id"] = request_id
         print_request_log(
-            service="CommandCtr AI Agent",
+            service="Twinstr AI Agent",
             method=request.method,
             path=request.url.path,
             status_code=response.status_code,
