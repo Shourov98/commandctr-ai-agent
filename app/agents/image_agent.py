@@ -18,7 +18,8 @@ from app.schemas.response import (
     TikTokResponse,
 )
 from app.services.image_service import ImagePayload
-from app.services.openai_service import OpenAIService, OpenAIServiceError
+from app.services.gemini_service import GeminiServiceError
+from app.services.provider_router import ImageProviderRouter
 from app.utils.prompts import PromptRegistry
 
 try:
@@ -70,8 +71,11 @@ class ImageAgent:
         },
     }
 
-    def __init__(self, openai_service: OpenAIService | None = None) -> None:
-        self.openai_service = openai_service
+    def __init__(
+        self,
+        image_provider: ImageProviderRouter | None = None,
+    ) -> None:
+        self.image_provider = image_provider
 
     async def process(
         self,
@@ -349,17 +353,15 @@ class ImageAgent:
         )
         relative_path = "images/transparent-cutout.png"
 
-        if self.openai_service is None or not self.openai_service.enabled:
+        if self.image_provider is None or not self.image_provider.enabled:
             return None
 
         try:
-            image_bytes = await self.openai_service.edit_image(
+            image_bytes = await self.image_provider.edit_image(
                 prompt=prompt,
                 image_bytes=image.data,
                 filename=image.filename,
                 mime_type=image.content_type,
-                size="1024x1024",
-                background="transparent",
             )
             image_bytes = self._cleanup_cutout_artifacts(image_bytes)
             absolute_path = output_service.save_binary(run_dir, relative_path, image_bytes, mime_type="image/png")
@@ -376,11 +378,11 @@ class ImageAgent:
                 relative_path=relative_path,
                 absolute_path=str(absolute_path),
                 prompt=prompt,
-                generation_mode="edited",
+                generation_mode=f"edited_{self.image_provider.last_provider or 'provider'}",
                 mime_type="image/png",
                 validation=validation,
             )
-        except OpenAIServiceError:
+        except GeminiServiceError:
             return None
 
     def _build_white_background_variant(

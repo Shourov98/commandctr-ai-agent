@@ -34,9 +34,16 @@ class Settings(BaseModel):
     openai_api_key: str | None = None
     openai_model: str = "gpt-4o"
     openai_image_model: str = "gpt-image-1"
+    openai_text_enabled: bool = False
+    openai_image_enabled: bool = False
     gemini_enabled: bool = False
     gemini_api_key: str | None = None
     gemini_model: str = "gemini-2.5-flash"
+    gemini_image_model: str = "gemini-2.5-flash-image"
+    gemini_text_enabled: bool = False
+    gemini_image_enabled: bool = False
+    text_provider_preference: str = "auto"
+    image_provider_preference: str = "auto"
     gemini_api_base_url: str = "https://generativelanguage.googleapis.com/v1beta"
     aws_region: str | None = None
     aws_s3_bucket: str | None = None
@@ -57,6 +64,12 @@ def get_settings() -> Settings:
     mongodb_uri = os.getenv("MONGODB_URI")
     mongodb_enabled_default = "true" if mongodb_uri else "false"
     mongodb_db_name = os.getenv("MONGODB_DB_NAME") or _db_name_from_mongodb_uri(mongodb_uri) or "product_ai_agent"
+    openai_legacy_enabled = os.getenv("OPENAI_ENABLED", "false").lower() == "true"
+    gemini_legacy_enabled = os.getenv("GEMINI_ENABLED", "false").lower() == "true"
+    openai_text_enabled = os.getenv("OPENAI_TEXT_ENABLED", str(openai_legacy_enabled)).lower() == "true"
+    openai_image_enabled = os.getenv("OPENAI_IMAGE_ENABLED", str(openai_legacy_enabled)).lower() == "true"
+    gemini_text_enabled = os.getenv("GEMINI_TEXT_ENABLED", str(gemini_legacy_enabled)).lower() == "true"
+    gemini_image_enabled = os.getenv("GEMINI_IMAGE_ENABLED", str(gemini_legacy_enabled)).lower() == "true"
     return Settings(
         debug=os.getenv("DEBUG", "false").lower() == "true",
         max_upload_size_bytes=int(
@@ -75,13 +88,20 @@ def get_settings() -> Settings:
         mongodb_imports_collection=os.getenv("MONGODB_IMPORTS_COLLECTION", "product_ai_imports"),
         mongodb_runs_collection=os.getenv("MONGODB_RUNS_COLLECTION", "product_ai_runs"),
         mongodb_users_collection=os.getenv("MONGODB_USERS_COLLECTION", "product_ai_users"),
-        openai_enabled=os.getenv("OPENAI_ENABLED", "false").lower() == "true",
+        openai_enabled=openai_legacy_enabled or openai_text_enabled or openai_image_enabled,
         openai_api_key=os.getenv("OPENAI_API_KEY"),
         openai_model=os.getenv("OPENAI_MODEL", "gpt-4o"),
         openai_image_model=os.getenv("OPENAI_IMAGE_MODEL", "gpt-image-1"),
-        gemini_enabled=os.getenv("GEMINI_ENABLED", "false").lower() == "true",
+        openai_text_enabled=openai_text_enabled,
+        openai_image_enabled=openai_image_enabled,
+        gemini_enabled=gemini_legacy_enabled or gemini_text_enabled or gemini_image_enabled,
         gemini_api_key=os.getenv("GEMINI_API_KEY"),
         gemini_model=os.getenv("GEMINI_MODEL", "gemini-2.5-flash"),
+        gemini_image_model=os.getenv("GEMINI_IMAGE_MODEL", "gemini-2.5-flash-image"),
+        gemini_text_enabled=gemini_text_enabled,
+        gemini_image_enabled=gemini_image_enabled,
+        text_provider_preference=os.getenv("TEXT_PROVIDER_PREFERENCE", "auto").strip().lower(),
+        image_provider_preference=os.getenv("IMAGE_PROVIDER_PREFERENCE", "auto").strip().lower(),
         gemini_api_base_url=os.getenv("GEMINI_API_BASE_URL", "https://generativelanguage.googleapis.com/v1beta"),
         aws_region=os.getenv("AWS_REGION"),
         aws_s3_bucket=os.getenv("AWS_S3_BUCKET"),

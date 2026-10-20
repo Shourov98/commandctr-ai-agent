@@ -150,19 +150,19 @@ class ProductService:
             local_output_enabled=settings.local_output_enabled,
         )
         self.__class__._shared_output_service = self.output_service
-        self.image_agent = self._shared_image_agent or ImageAgent(self.pipeline.openai_service)
+        self.image_agent = self._shared_image_agent or ImageAgent(self.pipeline.image_provider)
         self.__class__._shared_image_agent = self.image_agent
-        self.amazon_agent = self._shared_amazon_agent or AmazonAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.amazon_agent = self._shared_amazon_agent or AmazonAgent(None, self.pipeline.text_provider)
         self.__class__._shared_amazon_agent = self.amazon_agent
-        self.ebay_agent = self._shared_ebay_agent or EbayAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.ebay_agent = self._shared_ebay_agent or EbayAgent(None, self.pipeline.text_provider)
         self.__class__._shared_ebay_agent = self.ebay_agent
-        self.etsy_agent = self._shared_etsy_agent or EtsyAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.etsy_agent = self._shared_etsy_agent or EtsyAgent(None, self.pipeline.text_provider)
         self.__class__._shared_etsy_agent = self.etsy_agent
-        self.tiktok_agent = self._shared_tiktok_agent or TikTokAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.tiktok_agent = self._shared_tiktok_agent or TikTokAgent(None, self.pipeline.text_provider)
         self.__class__._shared_tiktok_agent = self.tiktok_agent
-        self.shopify_agent = self._shared_shopify_agent or ShopifyAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.shopify_agent = self._shared_shopify_agent or ShopifyAgent(None, self.pipeline.text_provider)
         self.__class__._shared_shopify_agent = self.shopify_agent
-        self.optimization_agent = self._shared_optimization_agent or ProductOptimizationAgent(self.pipeline.openai_service, self.pipeline.gemini_service)
+        self.optimization_agent = self._shared_optimization_agent or ProductOptimizationAgent(None, self.pipeline.text_provider)
         self.__class__._shared_optimization_agent = self.optimization_agent
 
     @classmethod

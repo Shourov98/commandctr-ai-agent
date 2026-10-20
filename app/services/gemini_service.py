@@ -17,11 +17,13 @@ class GeminiService:
         api_key: str | None,
         model: str,
         api_base_url: str,
+        image_model: str = "gemini-2.5-flash-image",
         enabled: bool = False,
     ) -> None:
         self.enabled = enabled and bool(api_key)
         self.api_key = api_key
         self.model = model
+        self.image_model = image_model
         self.api_base_url = api_base_url.rstrip("/")
 
     async def generate_structured_output(
@@ -87,6 +89,53 @@ class GeminiService:
         if not isinstance(parsed, dict):
             raise GeminiServiceError("Gemini returned a non-object JSON payload.")
         return parsed
+
+    async def edit_image(
+        self,
+        *,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+    ) -> bytes:
+        if not self.enabled or not self.api_key:
+            raise GeminiServiceError("Gemini is disabled.")
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        self.build_inline_media_part(data=image_bytes, mime_type=mime_type),
+                    ],
+                }
+            ],
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+        url = f"{self.api_base_url}/models/{self.image_model}:generateContent"
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                response = await client.post(url, params={"key": self.api_key}, json=payload)
+        except httpx.HTTPError as exc:
+            raise GeminiServiceError(f"Gemini image request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise GeminiServiceError(
+                f"Gemini image request failed with status {response.status_code}: {response.text[:240]}"
+            )
+
+        try:
+            parts = response.json()["candidates"][0]["content"]["parts"]
+            encoded = next(
+                part["inlineData"]["data"]
+                for part in parts
+                if isinstance(part, dict) and isinstance(part.get("inlineData"), dict) and part["inlineData"].get("data")
+            )
+        except (KeyError, IndexError, StopIteration, TypeError) as exc:
+            raise GeminiServiceError("Gemini returned no generated image.") from exc
+
+        import base64
+
+        return base64.b64decode(encoded)
 
     @staticmethod
     def _format_value(value: Any) -> str:

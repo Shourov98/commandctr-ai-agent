@@ -4,6 +4,7 @@ from app.config import get_settings
 from app.services.image_service import ImagePayload
 from app.services.gemini_service import GeminiService
 from app.services.openai_service import OpenAIService
+from app.services.provider_router import ImageProviderRouter, TextProviderRouter
 from app.services.market_research_service import MarketResearchService
 from app.services.output_service import OutputService
 from app.services.validation_service import ValidationService
@@ -58,19 +59,34 @@ class ProductPipeline:
         self.gemini_service = GeminiService(
             api_key=settings.gemini_api_key,
             model=settings.gemini_model,
+            image_model=settings.gemini_image_model,
             api_base_url=settings.gemini_api_base_url,
             enabled=settings.gemini_enabled,
         )
-        self.vision = vision or VisionAgent(openai_service=self.openai_service)
-        self.core = core or CoreAgent(self.openai_service, self.gemini_service)
-        self.attribute_mapper = attribute_mapper or AttributeMapperAgent(self.openai_service, self.gemini_service)
-        self.amazon = amazon or AmazonAgent(self.openai_service, self.gemini_service)
-        self.tiktok = tiktok or TikTokAgent(self.openai_service, self.gemini_service)
-        self.ebay = ebay or EbayAgent(self.openai_service, self.gemini_service)
-        self.etsy = etsy or EtsyAgent(self.openai_service, self.gemini_service)
-        self.shopify = shopify or ShopifyAgent(self.openai_service, self.gemini_service)
-        self.seo = seo or SeoAgent(self.openai_service, self.gemini_service)
-        self.images = ImageAgent(self.openai_service)
+        self.text_provider = TextProviderRouter(
+            openai_service=self.openai_service,
+            gemini_service=self.gemini_service,
+            openai_enabled=settings.openai_text_enabled,
+            gemini_enabled=settings.gemini_text_enabled,
+            preference=settings.text_provider_preference,
+        )
+        self.image_provider = ImageProviderRouter(
+            openai_service=self.openai_service,
+            gemini_service=self.gemini_service,
+            openai_enabled=settings.openai_image_enabled,
+            gemini_enabled=settings.gemini_image_enabled,
+            preference=settings.image_provider_preference,
+        )
+        self.vision = vision or VisionAgent(openai_service=self.openai_service if settings.openai_text_enabled else None)
+        self.core = core or CoreAgent(None, self.text_provider)
+        self.attribute_mapper = attribute_mapper or AttributeMapperAgent(None, self.text_provider)
+        self.amazon = amazon or AmazonAgent(None, self.text_provider)
+        self.tiktok = tiktok or TikTokAgent(None, self.text_provider)
+        self.ebay = ebay or EbayAgent(None, self.text_provider)
+        self.etsy = etsy or EtsyAgent(None, self.text_provider)
+        self.shopify = shopify or ShopifyAgent(None, self.text_provider)
+        self.seo = seo or SeoAgent(None, self.text_provider)
+        self.images = ImageAgent(self.image_provider)
         self.research = MarketResearchService(settings)
         self.validation = ValidationService()
         self.graph = ProductAgentGraph(
