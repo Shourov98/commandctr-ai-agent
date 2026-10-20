@@ -1,0 +1,241 @@
+from __future__ import annotations
+
+from app.schemas.response import CoreProductResponse, MarketplaceResearchResponse, SeoInsightsResponse, ShopifyResponse
+from app.services.gemini_service import GeminiService, GeminiServiceError
+from app.services.openai_service import OpenAIService, OpenAIServiceError
+from app.utils.prompts import PromptRegistry
+from app.utils.product_text import title_keywords, unique_strings
+
+
+
+class ShopifyAgent:
+    _SCHEMA = {
+        "type": "object",
+        "additionalProperties": False,
+        "required": ["title", "body_html", "tags", "product_type", "seo_title", "seo_description", "category", "metafields"],
+        "properties": {
+            "title": {"type": "string"},
+            "body_html": {"type": "string"},
+            "tags": {"type": "array", "items": {"type": "string"}, "minItems": 4, "maxItems": 12},
+            "product_type": {"type": "string"},
+            "seo_title": {"type": "string"},
+            "seo_description": {"type": "string"},
+            "category": {"type": "string"},
+            "metafields": {"type": "object", "additionalProperties": {"type": "string"}},
+        },
+    }
+
+    def __init__(
+        self,
+        openai_service: OpenAIService | None = None,
+        gemini_service: GeminiService | None = None,
+    ) -> None:
+        self.openai_service = openai_service
+        self.gemini_service = gemini_service
+
+    async def process(
+        self,
+        core_data: CoreProductResponse,
+        *,
+        research: MarketplaceResearchResponse | None = None,
+        seo: SeoInsightsResponse | None = None,
+    ) -> ShopifyResponse:
+        fallback = ShopifyResponse(
+            title=self._build_title(core_data, seo),
+            body_html=self._build_body_html(core_data),
+            tags=self._build_tags(core_data, research, seo),
+            product_type=core_data.product_type.title(),
+            seo_title=self._build_seo_title(core_data, seo),
+            seo_description=self._build_seo_description(core_data),
+            category=self._build_category(core_data),
+            metafields=self._build_metafields(core_data),
+        )
+        if self.gemini_service is not None:
+            try:
+                data = await self.gemini_service.generate_structured_output(
+                    system_prompt=PromptRegistry.get_copy_prompt("shopify"),
+                    user_payload={
+                        "core_product": core_data.model_dump(),
+                        "research": research.model_dump() if research is not None else None,
+                        "seo": seo.model_dump() if seo is not None else None,
+                    },
+                    use_google_search=True,
+                    schema=self._SCHEMA,
+                )
+                return self._from_data(data, fallback, self.gemini_service.model)
+            except GeminiServiceError:
+                pass
+
+        if self.openai_service is not None:
+            try:
+                data = await self.openai_service.generate_structured_output(
+                    system_prompt=PromptRegistry.get_copy_prompt("shopify"),
+                    user_payload={
+                        "core_product": core_data.model_dump(),
+                        "research": research.model_dump() if research is not None else None,
+                        "seo": seo.model_dump() if seo is not None else None,
+                    },
+                    schema_name="shopify_listing",
+                    schema=self._SCHEMA,
+                )
+                return self._from_data(data, fallback, self.openai_service.model)
+            except OpenAIServiceError:
+                pass
+
+        return fallback
+
+    def _from_data(self, data: dict[str, object], fallback: ShopifyResponse, model_name: str) -> ShopifyResponse:
+        from datetime import datetime, UTC
+        from app.schemas.response import AgentAuditMetadata
+        audit_meta = AgentAuditMetadata(
+            prompt_version="shopify-copy.v2",
+            model_version=model_name,
+            timestamp=datetime.now(UTC).isoformat(),
+            validation_passed=True,
+        )
+        return ShopifyResponse(
+            title=str(data.get("title", fallback.title))[:160],
+            body_html=str(data.get("body_html", fallback.body_html)),
+            tags=self._coerce_list(data.get("tags"), fallback.tags),
+            product_type=str(data.get("product_type", fallback.product_type)),
+            seo_title=str(data.get("seo_title", fallback.seo_title))[:70],
+            seo_description=str(data.get("seo_description", fallback.seo_description))[:180],
+            category=str(data.get("category", fallback.category))[:200],
+            metafields=self._coerce_metafields(data.get("metafields"), fallback.metafields),
+            audit=audit_meta,
+        )
+
+
+    @staticmethod
+    def _build_title(core_data: CoreProductResponse, seo: SeoInsightsResponse | None) -> str:
+        color = core_data.attributes.get("color")
+        material = core_data.attributes.get("material")
+        keyword = seo.marketplace_keywords.get("shopify", [None])[0] if seo is not None else None
+        parts = [core_data.normalized_title]
+        if color:
+            parts.append(color.title())
+        if material:
+            parts.append(material.title())
+        if keyword:
+            parts.append(keyword.title())
+        return " | ".join(parts[:3])[:160]
+
+    @staticmethod
+    def _build_body_html(core_data: CoreProductResponse) -> str:
+        bullets = "".join(f"<li>{feature}</li>" for feature in core_data.features[:5])
+        return f"<p>{core_data.product_summary}</p><ul>{bullets}</ul>"
+
+    @staticmethod
+    def _build_tags(
+        core_data: CoreProductResponse,
+        research: MarketplaceResearchResponse | None,
+        seo: SeoInsightsResponse | None,
+    ) -> list[str]:
+        raw_tags = [
+            core_data.product_type,
+            core_data.category,
+            *core_data.attributes.values(),
+            *title_keywords(core_data.normalized_title),
+        ]
+        if research is not None:
+            raw_tags.extend(research.keyword_signals[:4])
+        if seo is not None:
+            raw_tags.extend(seo.marketplace_keywords.get("shopify", []))
+        return unique_strings(raw_tags, limit=12)
+
+    @staticmethod
+    def _build_seo_title(core_data: CoreProductResponse, seo: SeoInsightsResponse | None) -> str:
+        extra = seo.primary_keywords[0].title() if seo is not None and seo.primary_keywords else core_data.category
+        return f"{core_data.normalized_title} | {extra}"[:70]
+
+    @staticmethod
+    def _build_seo_description(core_data: CoreProductResponse) -> str:
+        return f"{core_data.product_summary} Explore features, materials, and product details."[:180]
+
+    @staticmethod
+    def _build_category(core_data: CoreProductResponse) -> str:
+        category = core_data.category.strip()
+        product_type = core_data.product_type.strip().title()
+        if not category:
+            return product_type
+        if ">" in category:
+            return category
+        if product_type and product_type.lower() not in category.lower():
+            return f"{category} > {product_type}"
+        return category
+
+    @staticmethod
+    def _build_metafields(core_data: CoreProductResponse) -> dict[str, str]:
+        attributes = {str(key).strip().lower(): str(value).strip() for key, value in core_data.attributes.items() if str(value).strip()}
+        product_identity = f"{core_data.category} {core_data.product_type} {core_data.normalized_title}".lower()
+        metafields: dict[str, str] = {}
+
+        color = attributes.get("color")
+        if color:
+            metafields["color"] = color.title()
+
+        age_group = attributes.get("age_group") or attributes.get("age") or attributes.get("target_age_group")
+        if age_group:
+            metafields["age_group"] = age_group.title()
+        elif any(token in product_identity for token in ("kids", "children", "toddler", "infant")):
+            metafields["age_group"] = "Kids"
+        else:
+            metafields["age_group"] = "Adults"
+
+        closure = attributes.get("closure_type") or attributes.get("closure")
+        if closure:
+            metafields["closure_type"] = closure.title()
+        elif "shoe" in product_identity or "sneaker" in product_identity:
+            metafields["closure_type"] = "Lace-up"
+
+        heel_height = attributes.get("heel_height_type") or attributes.get("heel_height")
+        if heel_height:
+            metafields["heel_height_type"] = heel_height.title()
+        elif "heel" in product_identity:
+            metafields["heel_height_type"] = "Mid Heel"
+        elif "shoe" in product_identity or "sneaker" in product_identity:
+            metafields["heel_height_type"] = "Flat"
+
+        occasion = attributes.get("occasion_style") or attributes.get("occasion")
+        if occasion:
+            metafields["occasion_style"] = occasion.title()
+        elif "athletic" in product_identity or "running" in product_identity or "sneaker" in product_identity:
+            metafields["occasion_style"] = "Athletic"
+
+        gender = attributes.get("target_gender") or attributes.get("gender")
+        if gender:
+            metafields["target_gender"] = gender.title()
+        else:
+            metafields["target_gender"] = "Unisex"
+
+        toe_style = attributes.get("toe_style")
+        if toe_style:
+            metafields["toe_style"] = toe_style.title()
+        elif "shoe" in product_identity or "sneaker" in product_identity:
+            metafields["toe_style"] = "Round"
+
+        material = attributes.get("footwear_material") or attributes.get("material")
+        if material:
+            metafields["footwear_material"] = material.title()
+
+        return metafields
+
+    @staticmethod
+    def _coerce_list(value: object, fallback: list[str]) -> list[str]:
+        if isinstance(value, list) and all(isinstance(item, str) for item in value):
+            coerced = unique_strings(value, limit=12)
+            if coerced:
+                return coerced
+        return fallback
+
+    @staticmethod
+    def _coerce_metafields(value: object, fallback: dict[str, str]) -> dict[str, str]:
+        if isinstance(value, dict):
+            cleaned = {
+                str(key).strip(): str(item).strip()
+                for key, item in value.items()
+                if str(key).strip() and str(item).strip()
+            }
+            if cleaned:
+                return cleaned
+        return fallback

@@ -1,0 +1,205 @@
+from __future__ import annotations
+
+import json
+from typing import Any
+
+import httpx
+
+
+class GeminiServiceError(RuntimeError):
+    pass
+
+
+class GeminiService:
+    def __init__(
+        self,
+        *,
+        api_key: str | None,
+        model: str,
+        api_base_url: str,
+        image_model: str = "gemini-2.5-flash-image",
+        enabled: bool = False,
+    ) -> None:
+        self.enabled = enabled and bool(api_key)
+        self.api_key = api_key
+        self.model = model
+        self.image_model = image_model
+        self.api_base_url = api_base_url.rstrip("/")
+
+    async def generate_structured_output(
+        self,
+        *,
+        system_prompt: str,
+        user_payload: dict[str, Any],
+        use_google_search: bool = False,
+        schema: dict[str, Any] | None = None,
+        media_parts: list[dict[str, Any]] | None = None,
+    ) -> dict[str, Any]:
+        if not self.enabled or not self.api_key:
+            raise GeminiServiceError("Gemini is disabled.")
+
+        user_text = "\n".join(f"{key}: {self._format_value(value)}" for key, value in user_payload.items())
+        user_parts: list[dict[str, Any]] = [{"text": user_text}]
+        if media_parts:
+            user_parts.extend(media_parts)
+
+        payload: dict[str, Any] = {
+            "systemInstruction": {
+                "parts": [{"text": system_prompt}],
+            },
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": user_parts,
+                }
+            ],
+            "generationConfig": {
+                "temperature": 0.2,
+                "responseMimeType": "application/json",
+            },
+        }
+        if schema is not None:
+            payload["generationConfig"]["responseSchema"] = self._to_gemini_schema(schema)
+        if use_google_search:
+            payload["tools"] = [{"google_search": {}}]
+
+        url = f"{self.api_base_url}/models/{self.model}:generateContent"
+        params = {"key": self.api_key}
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(url, params=params, json=payload)
+        except httpx.HTTPError as exc:
+            raise GeminiServiceError(f"Gemini request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise GeminiServiceError(
+                f"Gemini request failed with status {response.status_code}: {response.text[:240]}"
+            )
+
+        data = response.json()
+        try:
+            parts = data["candidates"][0]["content"]["parts"]
+        except (KeyError, IndexError, TypeError) as exc:
+            raise GeminiServiceError("Gemini returned an unexpected response shape.") from exc
+
+        text = "".join(str(part.get("text", "")) for part in parts).strip()
+        if not text:
+            raise GeminiServiceError("Gemini returned an empty response.")
+
+        parsed = self._parse_json_text(text)
+        if not isinstance(parsed, dict):
+            raise GeminiServiceError("Gemini returned a non-object JSON payload.")
+        return parsed
+
+    async def edit_image(
+        self,
+        *,
+        prompt: str,
+        image_bytes: bytes,
+        mime_type: str,
+    ) -> bytes:
+        if not self.enabled or not self.api_key:
+            raise GeminiServiceError("Gemini is disabled.")
+
+        payload = {
+            "contents": [
+                {
+                    "role": "user",
+                    "parts": [
+                        {"text": prompt},
+                        self.build_inline_media_part(data=image_bytes, mime_type=mime_type),
+                    ],
+                }
+            ],
+            "generationConfig": {"responseModalities": ["IMAGE"]},
+        }
+        url = f"{self.api_base_url}/models/{self.image_model}:generateContent"
+        try:
+            async with httpx.AsyncClient(timeout=90.0) as client:
+                response = await client.post(url, params={"key": self.api_key}, json=payload)
+        except httpx.HTTPError as exc:
+            raise GeminiServiceError(f"Gemini image request failed: {exc}") from exc
+        if response.status_code >= 400:
+            raise GeminiServiceError(
+                f"Gemini image request failed with status {response.status_code}: {response.text[:240]}"
+            )
+
+        try:
+            parts = response.json()["candidates"][0]["content"]["parts"]
+            encoded = next(
+                part["inlineData"]["data"]
+                for part in parts
+                if isinstance(part, dict) and isinstance(part.get("inlineData"), dict) and part["inlineData"].get("data")
+            )
+        except (KeyError, IndexError, StopIteration, TypeError) as exc:
+            raise GeminiServiceError("Gemini returned no generated image.") from exc
+
+        import base64
+
+        return base64.b64decode(encoded)
+
+    @staticmethod
+    def _format_value(value: Any) -> str:
+        if isinstance(value, (dict, list, tuple)):
+            return json.dumps(value, ensure_ascii=False)
+        return str(value)
+
+    @staticmethod
+    def _parse_json_text(text: str) -> dict[str, Any]:
+        candidates = [text.strip()]
+        stripped = text.strip()
+        if stripped.startswith("```"):
+            lines = stripped.splitlines()
+            if len(lines) >= 3:
+                candidates.append("\n".join(lines[1:-1]).strip())
+
+        start = stripped.find("{")
+        end = stripped.rfind("}")
+        if start != -1 and end != -1 and end > start:
+            candidates.append(stripped[start : end + 1].strip())
+
+        for candidate in candidates:
+            try:
+                parsed = json.loads(candidate)
+            except json.JSONDecodeError:
+                continue
+            if isinstance(parsed, dict):
+                return parsed
+
+        raise GeminiServiceError("Gemini returned invalid JSON.")
+
+    @classmethod
+    def _to_gemini_schema(cls, value: Any) -> Any:
+        if isinstance(value, list):
+            return [cls._to_gemini_schema(item) for item in value]
+        if not isinstance(value, dict):
+            return value
+
+        unsupported_fields = {
+            "additionalProperties",
+            "$schema",
+            "$id",
+        }
+        type_aliases = {
+            "object": "OBJECT",
+            "array": "ARRAY",
+            "string": "STRING",
+            "number": "NUMBER",
+            "integer": "INTEGER",
+            "boolean": "BOOLEAN",
+        }
+        return {
+            key: type_aliases.get(child, child) if key == "type" and isinstance(child, str) else cls._to_gemini_schema(child)
+            for key, child in value.items()
+            if key not in unsupported_fields
+        }
+
+    @staticmethod
+    def build_inline_media_part(*, data: bytes, mime_type: str) -> dict[str, Any]:
+        import base64
+
+        return {
+            "inline_data": {
+                "mime_type": mime_type,
+                "data": base64.b64encode(data).decode("ascii"),
+            }
+        }
